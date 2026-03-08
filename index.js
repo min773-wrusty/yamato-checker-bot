@@ -1,5 +1,6 @@
 const express = require("express");
 const axios = require("axios");
+const sharp = require("sharp");
 const app = express();
 app.use(express.json());
 
@@ -46,14 +47,21 @@ app.post("/slack/events", async (req, res) => {
       return;
     }
 
-    // 2. 画像をダウンロード
+    // 2. 画像をダウンロード＆圧縮
     const fileUrl = files[0].url_private;
     const imgRes = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
       responseType: "arraybuffer"
     });
-    const base64Image = Buffer.from(imgRes.data).toString("base64");
-    const mimeType = files[0].mimetype;
+
+    // 4MB以下に圧縮
+    const compressedImg = await sharp(Buffer.from(imgRes.data))
+      .resize({ width: 1600, withoutEnlargement: true })
+      .jpeg({ quality: 80 })
+      .toBuffer();
+
+    const base64Image = compressedImg.toString("base64");
+    const mimeType = "image/jpeg";
 
     // 3. Claude APIで照合
     const claudeRes = await axios.post(

@@ -9,6 +9,9 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY;
 
 const processed = new Set();
 
+// 冷蔵不要の品名キーワード（新ワークフロー）
+const NON_REFRIGERATED_KEYWORDS = ["ﾘﾍﾞ", "ﾙｾ", "ｴｾﾞ", "防黄", "防通"];
+
 app.post("/slack/events", async (req, res) => {
   const { type, challenge, event } = req.body;
 
@@ -26,7 +29,7 @@ app.post("/slack/events", async (req, res) => {
     // 1. 品名を取得
     let slackItems = [];
     const msgText = event.text || "";
-    const inlineMatches = msgText.match(/[A-Za-z][\w.]*[-－]\d+ヶ月/g) || [];
+    const inlineMatches = msgText.match(/\S+/g) || [];
 
     if (inlineMatches.length > 0) {
       slackItems = [...new Set(inlineMatches)];
@@ -38,7 +41,7 @@ app.post("/slack/events", async (req, res) => {
       const messages = histRes.data.messages || [];
       const textMsg = messages.find(m => !m.files && m.text && m.ts !== event.ts);
       const fallbackText = textMsg?.text || "";
-      const fallbackMatches = fallbackText.match(/[A-Za-z][\w.]*[-－]\d+ヶ月/g) || [];
+      const fallbackMatches = fallbackText.match(/\S+/g) || [];
       slackItems = [...new Set(fallbackMatches)];
     }
 
@@ -47,24 +50,33 @@ app.post("/slack/events", async (req, res) => {
       return;
     }
 
-    // 2. 画像をダウンロード＆拡大処理
+    // 2. 冷蔵不要かどうか判定
+    const isNonRefrigerated = slackItems.some(item =>
+      NON_REFRIGERATED_KEYWORDS.some(kw => item.includes(kw))
+    );
+
+    // 3. 画像をダウンロード＆拡大処理
     const fileUrl = files[0].url_private;
     const imgRes = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
       responseType: "arraybuffer"
     });
 
-    // 画像を拡大してシャープ処理（文字を読みやすくする）
     const processedImg = await sharp(Buffer.from(imgRes.data))
-      .resize({ width: 3200, withoutEnlargement: false }) // 強制的に拡大
-      .sharpen({ sigma: 1.5 }) // シャープネスを上げて文字をくっきり
+      .resize({ width: 3200, withoutEnlargement: false })
+      .sharpen({ sigma: 1.5 })
       .jpeg({ quality: 90 })
       .toBuffer();
 
     const base64Image = processedImg.toString("base64");
     const mimeType = "image/jpeg";
 
-    // 3. Claude APIで照合
+    // 4. 冷蔵チェックのプロンプトを切り替え
+    const refrigerationRule = isNonRefrigerated
+      ? `2. すべての伝票の右上部に「冷蔵」と書かれたマークがあるか確認してください。\n\n【冷蔵に関する返答ルール】\n- 冷蔵マークが一つでも確認できる場合：「❄️ 冷蔵の伝票があります。目視で確認してください」と返してください。\n- 冷蔵マークがない場合：何も言及しなくてOKです。`
+      : `2. すべての伝票の右上部に「冷蔵」と書かれたマークがあるか確認してください。\n\n【冷蔵に関する返答ルール】\n- 冷蔵マークが一つでも確認できない場合：「❄️ 冷蔵ではない伝票があります。目視で確認してください」と返してください。\n- すべてに冷蔵マークがある場合：何も言及しなくてOKです。`;
+
+    // 5. Claude APIで照合
     const claudeRes = await axios.post(
       "https://api.anthropic.com/v1/messages",
       {
@@ -79,7 +91,7 @@ app.post("/slack/events", async (req, res) => {
             },
             {
               type: "text",
-              text: `この画像はヤマト運輸の伝票です。各伝票に「品名」という文字が印刷されており、その右横に手書きまたは印字された文字があります。その「品名」の右に書かれた文字（例：M2.5-1ヶ月）のみを読み取り、以下のリストと照合してください。人名・住所・伝票番号・電話番号はすべて無視してください。\n\n【正しい品名リスト】\n${slackItems.join(", ")}\n\n以下の2点を確認してください：\n1. 読み取ったすべての文字列が品名リストと一致しているか\n2. すべての伝票の右上部に「冷蔵」と書かれたマークがあるか\n\n【返答ルール】\n- 品名がすべて一致し、冷蔵マークもすべて確認できた場合：「確認済み✅」とだけ返してください。他の文章は不要です。\n- 品名が一つでも不一致の場合：「⚠️ 誤りがあるので目視で確認してください」と不一致の品名を返してください。\n- 冷蔵マークが一つでも確認できない場合：「❄️ 冷蔵ではない伝票があります。目視で確認してください」と返してください。`
+              text: `この画像はヤマト運輸の伝票です。各伝票の「品名」欄に記載された文字列のみを読み取り、以下のリストと照合してください。人名・住所・伝票番号・電話番号はすべて無視してください。\n\n【正しい品名リスト】\n${slackItems.join(", ")}\n\n以下の2点を確認してください：\n1. 読み取ったすべての品名が品名リストと一致しているか\n${refrigerationRule}\n\n【品名に関する返答ルール】\n- 品名がすべて一致し、冷蔵チェックも問題なければ：「確認済み✅」とだけ返してください。\n- 品名が一つでも不一致の場合：「⚠️ 誤りがあるので目視で確認してください」と不一致の品名を返してください。`
             }
           ]
         }]

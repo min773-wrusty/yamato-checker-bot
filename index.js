@@ -47,20 +47,21 @@ app.post("/slack/events", async (req, res) => {
       return;
     }
 
-    // 2. 画像をダウンロード＆圧縮
+    // 2. 画像をダウンロード＆拡大処理
     const fileUrl = files[0].url_private;
     const imgRes = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
       responseType: "arraybuffer"
     });
 
-    // 4MB以下に圧縮
-    const compressedImg = await sharp(Buffer.from(imgRes.data))
-      .resize({ width: 1600, withoutEnlargement: true })
-      .jpeg({ quality: 80 })
+    // 画像を拡大してシャープ処理（文字を読みやすくする）
+    const processedImg = await sharp(Buffer.from(imgRes.data))
+      .resize({ width: 3200, withoutEnlargement: false }) // 強制的に拡大
+      .sharpen({ sigma: 1.5 }) // シャープネスを上げて文字をくっきり
+      .jpeg({ quality: 90 })
       .toBuffer();
 
-    const base64Image = compressedImg.toString("base64");
+    const base64Image = processedImg.toString("base64");
     const mimeType = "image/jpeg";
 
     // 3. Claude APIで照合
@@ -78,7 +79,7 @@ app.post("/slack/events", async (req, res) => {
             },
             {
               type: "text",
-              text: `この画像はヤマト運輸の伝票です。各伝票に「品名」という文字が印刷されており、その右横に手書きまたは印字された文字があります。その「品名」の右に書かれた文字（例：M2.5-3ヶ月）のみを読み取り、以下のリストと照合してください。伝票番号・宛名・住所・電話番号・冷蔵マークは無視してください。\n\n【正しい品名リスト】\n${slackItems.join(", ")}\n\n以下の2点を確認してください：\n1. 品名が一致しているか\n2. 伝票に「冷蔵」マークがついているか\n\nすべて一致していれば「確認済み✅」と返してください。\n品名が不一致の場合は「⚠️ 誤りがあるので目視で確認してください」と不一致の品名を返してください。\n冷蔵マークがない伝票がある場合は「❄️ 冷蔵ではない伝票があります。目視で確認してください」と返してください。`
+              text: `この画像はヤマト運輸の伝票です。各伝票に「品名」という文字が印刷されており、その右横に手書きまたは印字された文字があります。その「品名」の右に書かれた文字（例：M2.5-3ヶ月）のみを読み取り、以下のリストと照合してください。伝票番号・宛名・住所・電話番号は無視してください。\n\n【正しい品名リスト】\n${slackItems.join(", ")}\n\n以下の2点を確認してください：\n1. 品名が一致しているか\n2. 伝票に「冷蔵」マークがついているか\n\nすべて一致していれば「確認済み✅」と返してください。\n品名が不一致の場合は「⚠️ 誤りがあるので目視で確認してください」と不一致の品名を返してください。\n冷蔵マークがない伝票がある場合は「❄️ 冷蔵ではない伝票があります。目視で確認してください」と返してください。`
             }
           ]
         }]

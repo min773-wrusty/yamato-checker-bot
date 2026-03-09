@@ -55,18 +55,22 @@ app.post("/slack/events", async (req, res) => {
       NON_REFRIGERATED_KEYWORDS.some(kw => item.includes(kw))
     );
 
-    // 3. 画像をダウンロード＆拡大処理
+    // 3. 画像をダウンロード＆圧縮（4MB以下になるまで）
     const fileUrl = files[0].url_private;
     const imgRes = await axios.get(fileUrl, {
       headers: { Authorization: `Bearer ${SLACK_TOKEN}` },
       responseType: "arraybuffer"
     });
 
-    const processedImg = await sharp(Buffer.from(imgRes.data))
-      .resize({ width: 3200, withoutEnlargement: false })
-      .sharpen({ sigma: 1.5 })
-      .jpeg({ quality: 90 })
-      .toBuffer();
+    let quality = 85;
+    let processedImg;
+    do {
+      processedImg = await sharp(Buffer.from(imgRes.data))
+        .resize({ width: 2000, withoutEnlargement: true })
+        .jpeg({ quality })
+        .toBuffer();
+      quality -= 10;
+    } while (processedImg.length > 4 * 1024 * 1024 && quality > 10);
 
     const base64Image = processedImg.toString("base64");
     const mimeType = "image/jpeg";

@@ -62,11 +62,11 @@ app.post("/slack/events", async (req, res) => {
       responseType: "arraybuffer"
     });
 
-    let quality = 85;
+    let quality = 80;
     let processedImg;
     do {
       processedImg = await sharp(Buffer.from(imgRes.data))
-        .resize({ width: 2000, withoutEnlargement: true })
+        .resize({ width: 1500, withoutEnlargement: true })
         .jpeg({ quality })
         .toBuffer();
       quality -= 10;
